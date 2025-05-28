@@ -10,7 +10,7 @@ TOPIC_NAME = 'recipe_topic'
 
 consumer = KafkaConsumer(
     TOPIC_NAME,
-    bootstrap_servers='kafka:9092',
+    bootstrap_servers='localhost:9092',
     value_deserializer=lambda v: json.loads(v.decode('utf-8')),
     auto_offset_reset='earliest',
     enable_auto_commit=True,
@@ -22,8 +22,8 @@ start_time = time.time()
 
 def save_batch(batch, index):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    os.makedirs('../dataset/batch_output', exist_ok=True)
-    filename = f"../dataset/batch_output/recipes_batch_{timestamp}_{index}.json"
+    os.makedirs('dataset/batch_output', exist_ok=True)
+    filename = f"dataset/batch_output/recipes_batch_{timestamp}_{index}.json"
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(batch, f, ensure_ascii=False, indent=2)
     print(f"Saved {len(batch)} records to {filename}")

@@ -1,1 +1,4 @@
 dataset/recipes_data.csv
+dataset/batch_output/
+models_output/
+venv

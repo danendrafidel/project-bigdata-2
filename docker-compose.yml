@@ -1,6 +1,6 @@
 services:
   zookeeper:
-    image: "bitnami/zookeeper:latest"
+    image: "bitnami/zookeeper:3.8" # Versi spesifik untuk zookeeper juga baik
     container_name: zookeeper
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
@@ -8,15 +8,16 @@ services:
       - "2181:2181"
 
   kafka:
-    image: "bitnami/kafka:latest"
+    image: "bitnami/kafka:3.3.2" # Coba versi ini dulu
     container_name: kafka
-    environment:
-      - KAFKA_BROKER_ID=1
-      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
-      - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_LISTENERS=PLAINTEXT://:9092
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
     ports:
       - "9092:9092"
+    environment:
+      # Konfigurasi untuk mode Zookeeper
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181 # Penting untuk mode Zookeeper
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
+      - KAFKA_LISTENERS=PLAINTEXT://:9092 # Untuk internal container
+      - ALLOW_PLAINTEXT_LISTENER=yes # Biasanya untuk kompatibilitas
     depends_on:
       - zookeeper
