@@ -15,7 +15,8 @@ Diasumsikan Anda sudah mengatur `pyenv local 3.8.18` di root direktori proyek.
 python -m venv venv
 
 # Aktifkan virtual environment
-source venv/bin/activate
+source venv/bin/activate  # untuk Linux/Mac
+.\venv\Scripts\activate  # untuk Windows
 
 # Instal dependensi
 pip install --upgrade pip
