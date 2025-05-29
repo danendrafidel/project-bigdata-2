@@ -77,3 +77,18 @@ mkdir -p models_output
 # Jalankan script training model
 python model/train_model.py
 ```
+
+### 7. Jalankan API Server
+
+API akan memuat model-model yang telah dilatih dan menyediakan endpoint untuk prediksi.
+(Dari root direktori proyek, di terminal baru atau yang sudah ada)
+
+```bash
+source venv/bin/activate
+cd api
+python app.py
+```
+
+### 8. Uji Endpoint API
+
+Gunakan Postman atau curl untuk mengirim request ke API.

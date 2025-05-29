@@ -16,7 +16,7 @@ SPARK_APP_NAME = "RecipeClustering"
 SPARK_MASTER = "local[*]"
 BATCH_DATA_PATH = "dataset/batch_output/"
 MODEL_OUTPUT_PATH = "models_output/"
-K_VALUE_FOR_KMEANS = 10 # Jumlah cluster yang diinginkan
+K_VALUE_FOR_KMEANS = 15 # Jumlah cluster yang diinginkan
 
 if not os.path.exists(MODEL_OUTPUT_PATH):
     os.makedirs(MODEL_OUTPUT_PATH)
@@ -130,6 +130,7 @@ if __name__ == "__main__":
             continue
 
         # Definisikan pipeline
+        
         remover = StopWordsRemover(inputCol="cleaned_ingredients", outputCol="filtered_ingredients")
         hashingTF = HashingTF(inputCol="filtered_ingredients", outputCol="raw_features", numFeatures=2000)
         idf = IDF(inputCol="raw_features", outputCol="features")
