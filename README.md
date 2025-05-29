@@ -122,6 +122,26 @@ Dokumentasi:
 ### 6. Jalankan Script Spark untuk Melatih Model
 
 Script ini akan membaca data batch yang disimpan oleh consumer, melakukan preprocessing, dan melatih model K-Means.
+
+Model yang digunakan:
+
+- Model v1 (Data: ~1/3): KMeans dengan TF-IDF.
+
+  - **Pengujian Konsep Dasar**: Dengan menggunakan sebagian kecil data (sekitar 1/3), tim dapat dengan cepat memvalidasi apakah pendekatan klasterisasi menggunakan K-Means dan TF-IDF memberikan hasil yang masuk akal. Ini membantu memastikan bahwa representasi teks TF-IDF mampu menangkap informasi yang cukup untuk klasterisasi dan bahwa K-Means adalah algoritma yang cocok untuk tugas ini.
+  - **Efisiensi Komputasi**: Melatih model pada subset data yang lebih kecil secara signifikan mengurangi waktu komputasi yang dibutuhkan. Ini sangat berguna pada tahap awal pengembangan, di mana banyak eksperimen dan penyesuaian mungkin diperlukan.
+  - **Identifikasi Masalah Awal**: Jika ada masalah mendasar dengan data atau pendekatan yang dipilih (misalnya, klaster yang tidak berarti, konvergensi yang buruk), masalah tersebut dapat terdeteksi lebih awal dengan dataset yang lebih kecil, tanpa harus menunggu proses pelatihan pada data penuh yang lebih lama.
+
+- Model v2 (Data: ~2/3): BisectingKMeans dengan TF-IDF.
+
+  - **Peningkatan Generalisasi**: Dengan melatih model pada sebagian besar data (sekitar 2/3), model memiliki kesempatan untuk mempelajari pola-pola yang lebih kaya dan lebih representatif dari keseluruhan dataset. Ini membantu model untuk menggeneralisasi lebih baik ke data yang tidak terlihat dan menghasilkan klaster yang lebih koheren dan bermakna.
+  - **Mengurangi Bias**: Menggunakan lebih banyak data dapat membantu mengurangi potensi bias yang mungkin ada jika model hanya dilatih pada subset yang sangat kecil yang mungkin tidak sepenuhnya merepresentasikan distribusi data.
+  - **Konfirmasi Skalabilitas Awal**: Ini juga memberikan indikasi awal tentang bagaimana performa model akan meningkat seiring dengan penambahan data, sebelum melangkah ke data penuh.
+
+- Model v3 (Data: Semua): KMeans dengan Word2Vec (jadi variasi pada featurisasi dan data penuh).
+  - **Pemanfaatan Data Penuh**: Menggunakan seluruh data memastikan bahwa model memiliki akses ke semua informasi yang tersedia, memungkinkan pengambilan keputusan yang paling akurat dan pembentukan klaster yang paling optimal berdasarkan semua pola yang ada.
+  - **Optimasi Kinerja Akhir**: Ini adalah langkah untuk menghasilkan model produksi yang paling kuat, yang dapat menangani kompleksitas data riil dan memberikan hasil klasterisasi yang paling akurat.
+  - **Eksplorasi Variasi Featurisasi**: Aspek "variasi pada featurisasi" sangat penting. Meskipun TF-IDF adalah baseline yang baik, mungkin ada metode representasi teks lain (misalnya, Word Embeddings seperti Word2Vec, GloVe, atau FastText, atau bahkan Transformer-based embeddings seperti BERT/RoBERTa jika cocok dengan konteks) yang dapat menangkap semantik dan hubungan kontekstual antar kata dengan lebih baik. Dengan mengeksplorasi variasi ini, tim dapat menemukan representasi yang menghasilkan klaster yang lebih bermakna dan terpisah dengan jelas, sehingga meningkatkan kualitas klasterisasi secara signifikan.
+
 (Dari root direktori proyek, di terminal baru atau yang sudah ada)
 
 ```bash
@@ -138,13 +158,13 @@ mkdir -p models_output
 python model/train_model.py
 ```
 
-Dari folder models_output yang telah dibuat, akan muncul folder train `recipe_cluster_model`
+Dari folder models_output yang telah dibuat, akan muncul folder train `recipe_cluster_model_x`
 
 Dokumentasi:
 
-![Pyspark](<images/Pyspark (1).png)
+![Pyspark](<images/Pyspark (1).png>)
 
-![Pyspark](<images/Pyspark (2).png)
+![Pyspark](images/Pyspark.png)
 
 ### 7. Jalankan Script API untuk Mengetes Cluster dari Dataset ini
 
@@ -155,13 +175,42 @@ python api/app.py
 
 ### 8. Buka POSTMAN untuk API TESTnya
 
+Berikut untuk macam endpointnya:
+
+```endpoint
+# Cek Status API
+http://localhost:5001
+
+# Cek Informasi Model
+http://127.0.0.1:5001/models_info
+
+# Model 1
+http://localhost:5001/predict/v1_kmeans_tfidf_k10
+
+# Model 2
+http://localhost:5001/predict/v2_bkm_tfidf_k10
+
+# Model 3
+http://localhost:5001/predict/v3_kmeans_word2vec_k10
+```
+
 Berikut Dokumentasinya:
 
 - Cek Informasi API (GET)
-  ![Dokumentasi](images/Dokumentasi.png)
+
+```endpoint
+http://localhost:5001
+```
+
+![Dokumentasi](images/Dokumentasi.png)
 
 - Cek Informasi Model (GET)
-  ![Dokumentasi](<images/Dokumentasi (2).png>)
+
+```endpoint
+http://localhost:5001
+```
+
+![Dokumentasi](<images/Dokumentasi (2).png>)
 
 - Input yang Salah (POST)
 
@@ -181,7 +230,7 @@ Berikut Dokumentasinya:
 }
 ```
 
-![Dokumentasi API](<images/Dokumentasi%20API%20(1).png>)
+![Dokumentasi API](<images/API TEST (1).png>)
 
 - Cluster 1
 
@@ -191,7 +240,7 @@ Berikut Dokumentasinya:
 }
 ```
 
-![Dokumentasi API](<images/Dokumentasi%20API%20(2).png>)
+![Dokumentasi API](<images/API TEST (2).png>)
 
 - Cluster 2
 
@@ -201,7 +250,7 @@ Berikut Dokumentasinya:
 }
 ```
 
-![Dokumentasi API](<images/Dokumentasi%20API%20(3).png>)
+![Dokumentasi API](<images/API TEST (3).png>)
 
 - Cluster 3
 
@@ -211,4 +260,4 @@ Berikut Dokumentasinya:
 }
 ```
 
-![Dokumentasi API](<images/Dokumentasi%20API%20(4).png>)
+![Dokumentasi API](<images/API TEST (4).png>)
