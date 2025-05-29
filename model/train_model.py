@@ -4,34 +4,33 @@ import os
 import sys
 import glob
 import json
-import re # Impor modul 're' untuk regular expressions
-import shutil # Untuk menghapus direktori model yang ada
+import re
+import shutil
 
-# ---------------------------------------------------------------------------
-# PENTING: Atur environment variable PYSPARK_PYTHON dan PYSPARK_DRIVER_PYTHON
-# sebelum mengimpor modul pyspark apa pun.
-# Ini memastikan Spark menggunakan interpreter Python dari virtual environment Anda.
-# ---------------------------------------------------------------------------
+# ... (bagian pengaturan PYSPARK_PYTHON tetap sama) ...
 if 'PYSPARK_PYTHON' not in os.environ:
     os.environ['PYSPARK_PYTHON'] = sys.executable
 if 'PYSPARK_DRIVER_PYTHON' not in os.environ:
     os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
 
-# Sekarang baru impor modul PySpark
 from pyspark.sql import SparkSession
-from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF
-from pyspark.ml.clustering import KMeans
+from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF, Word2Vec # Alternatif untuk HashingTF+IDF
+from pyspark.ml.clustering import KMeans, BisectingKMeans # Alternatif untuk KMeans
 from pyspark.ml import Pipeline
-from pyspark.sql.functions import udf, col, size # Pastikan 'size' diimpor
+from pyspark.sql.functions import udf, col, size
 from pyspark.sql.types import ArrayType, StringType
+from pyspark.ml.evaluation import ClusteringEvaluator # Untuk mengevaluasi model
 
 # Konfigurasi
 SPARK_APP_NAME = "RecipeClustering"
-SPARK_MASTER = "local[*]" # Gunakan semua core yang tersedia
+SPARK_MASTER = "local[*]"
 BATCH_DATA_PATH = "dataset/batch_output/"
 MODEL_OUTPUT_PATH = "models_output/"
-K_VALUE_FOR_KMEANS = 10 # Jumlah cluster yang diinginkan
+K_VALUE_FOR_KMEANS = 10 # Anda bisa eksperimen dengan nilai K ini
+HASHINGTF_NUM_FEATURES = 5000 # Naikkan sedikit, bisa dieksperimenkan
+MIN_DATA_POINTS_FACTOR = 2 # Model akan dilatih jika num_data_points >= K_VALUE_FOR_KMEANS * MIN_DATA_POINTS_FACTOR
 
+# ... (fungsi create_spark_session dan clean_ingredients_list_string tetap sama) ...
 # Pastikan direktori output model ada
 if not os.path.exists(MODEL_OUTPUT_PATH):
     os.makedirs(MODEL_OUTPUT_PATH)
@@ -40,60 +39,68 @@ if not os.path.exists(MODEL_OUTPUT_PATH):
 def create_spark_session():
     """Membuat dan mengembalikan SparkSession."""
     print(f"Attempting to create SparkSession with PYSPARK_PYTHON='{os.environ.get('PYSPARK_PYTHON')}'")
-    return SparkSession.builder.appName(SPARK_APP_NAME).master(SPARK_MASTER).getOrCreate()
+    # Tambahkan beberapa konfigurasi untuk stabilitas dan logging
+    return SparkSession.builder.appName(SPARK_APP_NAME)\
+        .master(SPARK_MASTER)\
+        .config("spark.sql.shuffle.partitions", "4")\
+        .config("spark.driver.memory", "2g")\
+        .config("spark.executor.memory", "2g")\
+        .getOrCreate() # Pastikan .getOrCreate() berada pada level indentasi yang sama atau sebagai kelanjutan langsung
 
-# UDF untuk membersihkan 'ingredients'
 def clean_ingredients_list_string(ingredients_str):
     """Membersihkan string JSON dari ingredients menjadi daftar kata-kata bersih."""
     if not ingredients_str:
         return []
     try:
-        # Coba parsing sebagai JSON, jika gagal, mungkin sudah berupa list string (jarang)
-        # atau format tak terduga.
         if isinstance(ingredients_str, str):
             list_of_ingredient_phrases = json.loads(ingredients_str)
-        elif isinstance(ingredients_str, list): # Jika input sudah berupa list
+        elif isinstance(ingredients_str, list):
             list_of_ingredient_phrases = ingredients_str
         else:
-            return [] # Format tidak dikenali
+            return []
 
         all_words = []
         for phrase in list_of_ingredient_phrases:
-            if not isinstance(phrase, str): # Lewati jika frasa bukan string
+            if not isinstance(phrase, str):
                 continue
+            # Lebih agresif dalam membersihkan, fokus pada kata bahan
             cleaned_phrase = phrase.lower()
-            cleaned_phrase = re.sub(r"[^a-z\s]", "", cleaned_phrase) # Hapus non-alfabet kecuali spasi
-            cleaned_phrase = re.sub(r"\s+", " ", cleaned_phrase).strip() # Hapus spasi berlebih
+            # Hapus ukuran, unit, dan teks dalam kurung (seringkali instruksi)
+            cleaned_phrase = re.sub(r'\([^)]*\)', '', cleaned_phrase) # hapus (text)
+            cleaned_phrase = re.sub(r'\b(oz|ounce|ounces|g|gram|grams|kg|kilogram|kilograms|lb|lbs|pound|pounds|cup|cups|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|ml|milliliter|milliliters|l|liter|liters|to taste|or more|as needed|chopped|sliced|diced|minced|peeled|cored|seeded|fresh|dried|ground|optional|preferably|about|approximately)\b', '', cleaned_phrase, flags=re.IGNORECASE)
+            cleaned_phrase = re.sub(r"[^a-z\s-]", "", cleaned_phrase) # Izinkan hyphen (misal: "self-raising")
+            cleaned_phrase = re.sub(r"\s+", " ", cleaned_phrase).strip()
+            
             words_in_phrase = cleaned_phrase.split()
             for word in words_in_phrase:
-                if len(word) > 2: # Hanya ambil kata dengan panjang lebih dari 2
+                # Hapus kata-kata yang sangat pendek atau umum yang mungkin lolos dari stopwords
+                if len(word) > 2 and word not in ['and', 'the', 'for', 'with', 'into', 'onto', 'from']: 
                     all_words.append(word)
-        return all_words
+        return list(set(all_words)) # Kembalikan kata unik untuk menghindari bobot berlebih dari pengulangan di satu resep
     except json.JSONDecodeError:
-        # Jika ini adalah string tunggal yang bukan JSON, coba proses langsung
         if isinstance(ingredients_str, str):
             cleaned_phrase = ingredients_str.lower()
-            cleaned_phrase = re.sub(r"[^a-z\s]", "", cleaned_phrase)
+            cleaned_phrase = re.sub(r'\([^)]*\)', '', cleaned_phrase)
+            cleaned_phrase = re.sub(r'\b(oz|ounce|ounces|g|gram|grams|kg|kilogram|kilograms|lb|lbs|pound|pounds|cup|cups|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|ml|milliliter|milliliters|l|liter|liters|to taste|or more|as needed|chopped|sliced|diced|minced|peeled|cored|seeded|fresh|dried|ground|optional|preferably|about|approximately)\b', '', cleaned_phrase, flags=re.IGNORECASE)
+            cleaned_phrase = re.sub(r"[^a-z\s-]", "", cleaned_phrase)
             cleaned_phrase = re.sub(r"\s+", " ", cleaned_phrase).strip()
             words_in_phrase = cleaned_phrase.split()
-            all_words = [word for word in words_in_phrase if len(word) > 2]
-            return all_words
-        # print(f"Error parsing ingredients: '{ingredients_str}', Error: {e}") # Aktifkan untuk debug
+            all_words = [word for word in words_in_phrase if len(word) > 2 and word not in ['and', 'the', 'for', 'with', 'into', 'onto', 'from']]
+            return list(set(all_words))
         return []
-    except Exception: # Tangkap kesalahan lain yang mungkin terjadi
-        # print(f"Unexpected error processing ingredients: '{ingredients_str}', Error: {e}")
+    except Exception:
         return []
 
-# Daftarkan UDF
 clean_ingredients_udf = udf(clean_ingredients_list_string, ArrayType(StringType()))
 
 if __name__ == "__main__":
-    spark = None # Inisialisasi spark ke None
+    spark = None
     try:
         spark = create_spark_session()
+        spark.sparkContext.setLogLevel("WARN") # Set log level setelah session dibuat
         print("SparkSession created successfully.")
 
-        # 1. Dapatkan daftar semua file batch dan urutkan
+        # ... (bagian glob file tetap sama) ...
         json_files_glob_pattern = os.path.join(BATCH_DATA_PATH, "recipes_batch_*.json")
         all_batch_files = sorted(glob.glob(json_files_glob_pattern))
 
@@ -104,28 +111,20 @@ if __name__ == "__main__":
             exit()
 
         num_total_files = len(all_batch_files)
-        print(f"Found {num_total_files} batch files.") # Disingkat agar tidak terlalu verbose jika banyak file
-        # print(f"Found {num_total_files} batch files: {all_batch_files}") # Uncomment jika ingin lihat list file
+        print(f"Found {num_total_files} batch files.")
 
-        # 2. Tentukan konfigurasi file untuk setiap model (Skema B: kumulatif)
+        # ... (bagian konfigurasi model tetap sama) ...
         model_configurations = []
-
         if num_total_files > 0:
-            # Model 1: Menggunakan sekitar 1/3 file pertama (minimal 1 file)
             end_idx_m1 = max(1, num_total_files // 3)
             model_configurations.append(all_batch_files[:end_idx_m1])
-
-            # Model 2: Menggunakan sekitar 2/3 file pertama (kumulatif)
             end_idx_m2 = max(end_idx_m1, (2 * num_total_files) // 3)
             if end_idx_m2 > end_idx_m1 and end_idx_m2 <= num_total_files:
                 model_configurations.append(all_batch_files[:end_idx_m2])
-            
-            # Model 3: Menggunakan semua file (kumulatif)
             if not model_configurations or len(all_batch_files) > len(model_configurations[-1]):
                 if len(all_batch_files) > 0 and (not model_configurations or all_batch_files != model_configurations[-1]):
                     model_configurations.append(all_batch_files)
 
-        # Hapus konfigurasi duplikat
         unique_model_configs_paths = []
         seen_config_tuples = set()
         for config_list in model_configurations:
@@ -136,67 +135,86 @@ if __name__ == "__main__":
         
         print(f"Will attempt to train {len(unique_model_configs_paths)} model(s) based on available data.")
 
+
         for i, files_for_this_model in enumerate(unique_model_configs_paths):
             model_version_num = i + 1
-
-            if not files_for_this_model:
-                print(f"Skipping model v{model_version_num}, no files selected.")
-                continue
-
             print(f"\n--- Training Model v{model_version_num} using {len(files_for_this_model)} batch files ---")
-            # print(f"Files: {files_for_this_model}") # Uncomment jika ingin lihat list file untuk model ini
 
-            # Baca data untuk model saat ini
             raw_df_model = spark.read.option("multiLine", "true").json(files_for_this_model)
-            
             if 'ingredients' not in raw_df_model.columns:
                 print(f"ERROR: Column 'ingredients' not found for Model v{model_version_num}. Skipping.")
                 continue
 
-            # Filter baris di mana 'ingredients' adalah null sebelum UDF
-            data_df_model = raw_df_model.filter(col("ingredients").isNotNull())
-            
-            # Terapkan UDF dan filter lagi jika UDF menghasilkan array kosong
+            data_df_model = raw_df_model.select("title", "ingredients").filter(col("ingredients").isNotNull()) # Pilih kolom yang relevan
             data_df_model = data_df_model.withColumn("cleaned_ingredients", clean_ingredients_udf(col("ingredients")))
+            
+            # Log sampel data setelah UDF
+            print(f"Sample data after UDF for Model v{model_version_num} (first 5 rows):")
+            data_df_model.select("ingredients", "cleaned_ingredients").show(5, truncate=False)
+
             processed_df_model = data_df_model.filter(size(col("cleaned_ingredients")) > 0)
             
-            num_data_points = processed_df_model.count() # Ini adalah aksi Spark pertama yang memicu eksekusi
+            num_data_points = processed_df_model.count()
             print(f"Model v{model_version_num}: Rows after UDF and filtering empty ingredients: {num_data_points}")
 
-            if num_data_points == 0:
-                print(f"WARNING: Model v{model_version_num} - No data points after processing. Skipping this model.")
-                continue
-            if num_data_points < K_VALUE_FOR_KMEANS:
-                print(f"WARNING: Model v{model_version_num} - Not enough data points ({num_data_points}) "
-                      f"to train K-Means with k={K_VALUE_FOR_KMEANS}. Skipping this model.")
+            # Minimal data point yang lebih ketat
+            min_required_points = K_VALUE_FOR_KMEANS * MIN_DATA_POINTS_FACTOR
+            if num_data_points < min_required_points :
+                print(f"WARNING: Model v{model_version_num} - Not enough data points ({num_data_points}). "
+                      f"Required at least {min_required_points} (K * {MIN_DATA_POINTS_FACTOR}). Skipping this model.")
                 continue
 
             # Definisikan pipeline ML
-            remover = StopWordsRemover(inputCol="cleaned_ingredients", outputCol="filtered_ingredients")
-            hashingTF = HashingTF(inputCol="filtered_ingredients", outputCol="raw_features", numFeatures=2000)
-            idf = IDF(inputCol="raw_features", outputCol="features")
-            kmeans = KMeans(featuresCol="features", k=K_VALUE_FOR_KMEANS, seed=1) # seed untuk reproduktifitas
+            # Gunakan stopwords bahasa Inggris default, atau sediakan custom list jika perlu
+            # stop_words = StopWordsRemover.loadDefaultStopWords("english") + ["tbsp", "tsp", "cup", "oz", "g", "ml", "lb", "optional", "fresh", "dried"]
+            remover = StopWordsRemover(inputCol="cleaned_ingredients", outputCol="filtered_ingredients") # , stopWords=stop_words tambahkan jika mau custom
+            
+            hashingTF = HashingTF(inputCol="filtered_ingredients", outputCol="raw_features", numFeatures=HASHINGTF_NUM_FEATURES)
+            idf = IDF(inputCol="raw_features", outputCol="features", minDocFreq=2) # minDocFreq: ignore terms that appear in less than X documents
+
+            # ---- Alternatif Featurization: Word2Vec ----
+            # word2Vec = Word2Vec(vectorSize=100, minCount=2, inputCol="filtered_ingredients", outputCol="features")
+            # kmeans = KMeans(featuresCol="features", k=K_VALUE_FOR_KMEANS, seed=1, initMode="k-means||", maxIter=20, tol=1e-4)
+            # pipeline = Pipeline(stages=[remover, word2Vec, kmeans]) # Jika pakai Word2Vec
+
+            # ---- Pipeline dengan HashingTF + IDF ----
+            kmeans = KMeans(featuresCol="features", k=K_VALUE_FOR_KMEANS, seed=1,
+                            initMode="k-means||", maxIter=20, tol=1e-4) # Parameter standar
             pipeline = Pipeline(stages=[remover, hashingTF, idf, kmeans])
-            
+
+
+            # ---- Alternatif Algoritma Clustering: BisectingKMeans ----
+            # bkm = BisectingKMeans(featuresCol="features", k=K_VALUE_FOR_KMEANS, seed=1, maxIter=20, minDivisibleClusterSize=1.0)
+            # pipeline = Pipeline(stages=[remover, hashingTF, idf, bkm]) # Jika pakai BisectingKMeans
+
             print(f"Starting training for Model v{model_version_num}...")
-            model = pipeline.fit(processed_df_model) # Aksi Spark kedua
+            model = pipeline.fit(processed_df_model)
             print(f"Training finished for Model v{model_version_num}.")
+
+            # Evaluasi Model (Silhouette Score)
+            predictions_df = model.transform(processed_df_model)
+            evaluator = ClusteringEvaluator(predictionCol="prediction", featuresCol="features", metricName="silhouette", distanceMeasure="squaredEuclidean")
+            silhouette = evaluator.evaluate(predictions_df)
+            print(f"Model v{model_version_num}: Silhouette Score = {silhouette:.4f}") # Silhouette: -1 (buruk) hingga 1 (baik), 0 (overlap)
+
+            # Tampilkan distribusi cluster
+            print(f"Cluster distribution for Model v{model_version_num}:")
+            predictions_df.groupBy("prediction").count().orderBy("prediction").show()
             
+            # Jika silhouette sangat rendah atau semua data masuk ke satu cluster, beri peringatan
+            cluster_counts = predictions_df.groupBy("prediction").count().collect()
+            if silhouette < 0.1 or len(cluster_counts) < K_VALUE_FOR_KMEANS / 2 or any(row['count'] > num_data_points * 0.8 for row in cluster_counts):
+                print(f"WARNING: Model v{model_version_num} may have poor clustering quality. Silhouette: {silhouette:.4f}. Check cluster distribution.")
+
+
             model_name = f"recipe_cluster_model_v{model_version_num}"
             model_path = os.path.join(MODEL_OUTPUT_PATH, model_name)
             
-            # Hapus direktori model jika sudah ada untuk menimpa
             if os.path.exists(model_path):
                 print(f"Removing existing model directory: {model_path}")
                 shutil.rmtree(model_path)
-
-            model.save(model_path) # Aksi Spark ketiga (jika melibatkan penulisan data, bisa jadi)
+            model.save(model_path)
             print(f"Model {model_name} saved to {model_path}")
-
-            # (Opsional) Tampilkan prediksi untuk sampel data model ini
-            # predictions = model.transform(processed_df_model)
-            # print(f"Sample predictions for Model v{model_version_num}:")
-            # predictions.select("title", "cleaned_ingredients", "prediction").show(5, truncate=False)
 
     except Exception as e_main:
         print(f"An critical error occurred in the main script: {e_main}")
