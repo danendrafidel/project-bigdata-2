@@ -16,7 +16,7 @@ python -m venv venv
 
 # Aktifkan virtual environment
 source venv/bin/activate  # untuk Linux/Mac
-.\venv\Scripts\activate  # untuk Windows
+source venv/Scripts/activate # untuk Windows
 
 # Instal dependensi
 pip install --upgrade pip
